@@ -218,3 +218,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local robot data, model weights and experiment outputs are not source code.
+/arm100/
+/data/
+/outputs/
+/runs/
+/checkpoints/
+*.pt
+*.safetensors
+*.tar
+.DS_Store
