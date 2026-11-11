@@ -20,6 +20,7 @@ from . import (LoRAConfig, SpatialAdapterConfig, install_qwen_lora, install_spat
                load_lora_state_dict, lora_state_dict)
 from .interface import (configure_processor_embodiment, install_action_interface,
                         interface_state_dict, load_interface_state_dict, processor_embodiment)
+from .vl_padding import configure_vl_self_attention_mask
 
 
 def episode_split(total: int, fraction: float, seed: int) -> tuple[list[int], list[int]]:
@@ -249,6 +250,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="Selected slot when training the interface; raw checkpoints default to 10")
     parser.add_argument("--no-spatial", action="store_true", help="Disable spatial cross-attention")
     parser.add_argument("--no-lora", action="store_true", help="Disable Qwen LoRA")
+    parser.add_argument("--mask-vl-self-attention", action="store_true",
+                        help="Exclude padding keys from action head VL self-attention")
     args = parser.parse_args(argv)
     if min(args.steps, args.batch_size, args.chunk_size, args.eval_batches, args.save_every, args.log_every) <= 0:
         parser.error("steps, batch-size, eval-batches, save-every and log-every must be positive")
@@ -344,6 +347,7 @@ def main(argv: list[str] | None = None) -> None:
                              collate_fn=lerobot_collate_fn, generator=torch.Generator().manual_seed(args.seed))
     print("Loading saved LeRobot policy and processors...", flush=True)
     policy = make_policy(cfg=config, ds_meta=meta)
+    configure_vl_self_attention_mask(policy, args.mask_vl_self_attention)
     if raw_base:
         # Raw N1.7 needs dataset stats for this embodiment. LeRobot v3's
         # stats are global, so held-out loss is not a completely isolated test.
@@ -409,6 +413,7 @@ def main(argv: list[str] | None = None) -> None:
                                   lr=args.learning_rate, weight_decay=args.weight_decay)
     print(f"Trainable parameters: {sum(p.numel() for p in trainable):,}; action horizon: {horizon}; "
           f"embodiment ID: {selected_id if selected_id is not None else 'processor default'}", flush=True)
+    print(f"VL self-attention padding mask: {'on' if args.mask_vl_self_attention else 'off'}", flush=True)
     for group in groups:
         print(f"  {group['name']}: {sum(p.numel() for p in group['params']):,} parameters", flush=True)
     print("Hashing dataset and base checkpoint for reproducibility...", flush=True)
@@ -422,7 +427,8 @@ def main(argv: list[str] | None = None) -> None:
                 "eval_every": args.eval_every, "eval_batches": args.eval_batches,
                 "spatial": adapter.adapter_metadata(), "lora": asdict(lora_cfg) if not args.no_lora else None,
                 "experiment": {"spatial_enabled": not args.no_spatial, "lora_enabled": not args.no_lora,
-                               "train_interface": args.train_interface, "embodiment_id": selected_id},
+                               "train_interface": args.train_interface, "embodiment_id": selected_id,
+                               "mask_vl_self_attention": args.mask_vl_self_attention},
                 "horizon": horizon,
                 "torch": str(torch.__version__), "numpy": np.__version__, "python": sys.version,
                 "lerobot": importlib.metadata.version("lerobot"),

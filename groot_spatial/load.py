@@ -1,6 +1,7 @@
 """Restore a trained sidecar into its exact LeRobot GR00T base policy."""
 from pathlib import Path
 from typing import Any
+import warnings
 
 import torch
 from torch import nn
@@ -9,9 +10,11 @@ from . import (LoRAConfig, SpatialAdapterConfig, install_qwen_lora, install_spat
                load_lora_state_dict)
 from .interface import install_action_interface, load_interface_state_dict, processor_embodiment
 from .train import fingerprint_checkpoint, fingerprint_tree
+from .vl_padding import configure_vl_self_attention_mask
 
 
-def load_trained_sidecar(policy: nn.Module, sidecar_path: str | Path, base_checkpoint: str | Path) -> Any:
+def load_trained_sidecar(policy: nn.Module, sidecar_path: str | Path, base_checkpoint: str | Path,
+                         *, mask_vl_self_attention: bool | None = None) -> Any:
     """Install weights onto an already loaded policy, verifying the base file hash.
 
     Load the policy and its processors from the same base_checkpoint before
@@ -26,6 +29,15 @@ def load_trained_sidecar(policy: nn.Module, sidecar_path: str | Path, base_check
     spatial = dict(manifest["spatial"]["config"])
     mode = manifest.get("experiment", {"spatial_enabled": True, "lora_enabled": True,
                                        "train_interface": False, "embodiment_id": None})
+    recorded_mask = mode.get("mask_vl_self_attention", False)
+    if not isinstance(recorded_mask, bool):
+        raise ValueError("invalid VL padding mask setting in checkpoint")
+    if mask_vl_self_attention is not None and not isinstance(mask_vl_self_attention, bool):
+        raise TypeError("mask_vl_self_attention must be bool or None")
+    if mask_vl_self_attention is not None and mask_vl_self_attention != recorded_mask:
+        warnings.warn("VL padding mask override differs from training checkpoint; "
+                      "inference behavior may change", RuntimeWarning, stacklevel=2)
+    effective_mask = recorded_mask if mask_vl_self_attention is None else mask_vl_self_attention
     spatial["layer_indices"] = tuple(spatial["layer_indices"])
     policy.requires_grad_(False)
     adapter = install_spatial_adapter(policy, SpatialAdapterConfig(**spatial))
@@ -46,12 +58,14 @@ def load_trained_sidecar(policy: nn.Module, sidecar_path: str | Path, base_check
         load_interface_state_dict(modules, saved["interface"])
     elif saved.get("interface"):
         raise ValueError("checkpoint contains interface weights but interface training is disabled")
+    configure_vl_self_attention_mask(policy, effective_mask)
     policy.eval()
     return adapter
 
 
 def load_experiment(sidecar_path: str | Path, base_checkpoint: str | Path,
-                    run_dir: str | Path, device: str = "cuda") -> tuple[Any, Any, Any, Any]:
+                    run_dir: str | Path, device: str = "cuda", *,
+                    mask_vl_self_attention: bool | None = None) -> tuple[Any, Any, Any, Any]:
     """Load the base policy, both matching processors, and the trained sidecar.
 
     Returns (policy, preprocessor, postprocessor, adapter). This loads weights
@@ -99,5 +113,5 @@ def load_experiment(sidecar_path: str | Path, base_checkpoint: str | Path,
         actual_id = processor_embodiment(preprocessor, config.embodiment_tag)
         if actual_id != mode.get("embodiment_id"):
             raise ValueError(f"processor embodiment ID {actual_id} does not match the trained interface")
-    adapter = load_trained_sidecar(policy, sidecar_path, base)
+    adapter = load_trained_sidecar(policy, sidecar_path, base, mask_vl_self_attention=mask_vl_self_attention)
     return policy, preprocessor, postprocessor, adapter

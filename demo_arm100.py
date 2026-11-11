@@ -79,6 +79,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--frame", type=int, default=0, help="Frame index within the selected episode")
     parser.add_argument("--show-steps", type=int, default=5, help="Number of predicted actions to display")
     parser.add_argument("--seed", type=int, default=42, help="Action noise seed")
+    parser.add_argument("--mask-vl-self-attention", action=argparse.BooleanOptionalAction, default=None,
+                        help="Override checkpoint's VL self-attention padding mask setting")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--video-backend", choices=("pyav", "torchcodec"), default="pyav")
     parser.add_argument("--allow-dataset-mismatch", action="store_true",
@@ -126,7 +128,11 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("dataset does not match the expected ARM100 cameras/action order")
     print("Loading GR00T N1.7 and trained sidecar...", flush=True)
     policy, preprocessor, postprocessor, _ = load_experiment(
-        args.checkpoint, args.base_checkpoint, args.run_dir, device=str(device))
+        args.checkpoint, args.base_checkpoint, args.run_dir, device=str(device),
+        mask_vl_self_attention=args.mask_vl_self_attention)
+    recorded_mask = manifest.get("experiment", {}).get("mask_vl_self_attention", False)
+    effective_mask = recorded_mask if args.mask_vl_self_attention is None else args.mask_vl_self_attention
+    print(f"VL self-attention padding mask: {'on' if effective_mask else 'off'}", flush=True)
     delta = resolve_delta_timestamps(policy.config, meta)
     if not delta or "action" not in delta:
         raise ValueError("model config does not specify an action horizon")

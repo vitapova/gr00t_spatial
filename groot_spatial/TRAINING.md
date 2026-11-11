@@ -47,8 +47,18 @@ python -m groot_spatial.train \
   --base-checkpoint /path/to/n1.7-checkpoint \
   --output-dir /path/to/new-run \
   --device cuda --batch-size 1 --steps 10000 --train-interface \
+  --mask-vl-self-attention \
   --save-every 500 --eval-every 500
 ```
+
+`--mask-vl-self-attention` is optional and defaults to **off**. It applies the
+backbone's 0/1 valid-token mask as an additive key mask to every action-head
+`vl_self_attention` block; it does not change Qwen, DiT, action padding/noising,
+or the existing masked action loss. It requires a VL self-attention transformer
+without its own positional embeddings. The setting is recorded in the
+checkpoint/manifest and automatically restored for demo/inference. Keep it the
+same for train, validation, inference, and resuming a run. Changing it changes
+model behavior and should be treated as a separate experiment.
 
 By default, `--output-dir` must not exist. Add `--force-overwrite` to delete
 the existing output directory **and everything in it**, then start a new run.
@@ -66,6 +76,7 @@ episode split, hyperparameters, software versions or source files is rejected.
 Resume checkpoints created with a different version of the training source are
 rejected. Version-1 sidecar-only checkpoints can still be loaded for inference,
 but cannot resume training with this new source/checkpoint format.
+Older sidecar checkpoints without a VL-mask setting load with it off by default.
 Resume is single-process, `num_workers=0`; bitwise GPU reproducibility is not
 guaranteed across drivers/kernels. Checkpoints are written exclusively and an
 interrupted write can leave an incomplete file: use the previous checkpoint.

@@ -16,6 +16,13 @@ python demo_arm100.py \
   --device cuda
 ```
 
+The VL self-attention padding mask defaults to the setting recorded during
+training. For an explicit inference-only ablation, add
+`--mask-vl-self-attention` or `--no-mask-vl-self-attention`. Overriding the
+training setting emits a warning: this changes model behavior and is not a
+replacement for a consistently trained/evaluated model. Older checkpoints
+without this setting default to the original unmasked behavior.
+
 Use an actual saved `step_XXXXXXXX.pt`, not the `model.safetensors` from the
 base. For resumed training, `--run-dir` must point to the directory containing
 that run's `processors/` and `policy_config/`. The loader verifies these files

@@ -28,6 +28,11 @@ Qwen gradient checkpointing disabled; don't use `torch.compile` with these
 dynamic hooks. Output equivalence and gradients must be rechecked if changing
 LeRobot / Transformers versions.
 
+Separately, `--mask-vl-self-attention` optionally masks padding keys in the
+action-head VL self-attention projector; this is independent of the spatial
+reader and does not alter action padding or the flow-matching loss. Its setting
+is stored with the training checkpoint and restored for inference.
+
 ## Adapter-only experiment: API example
 
 This section describes the original reader-only API. For the new optional

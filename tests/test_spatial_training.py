@@ -149,3 +149,48 @@ def test_train_step_updates_weights_and_rejects_nonfinite():
     assert not torch.equal(before, policy.w)
     with pytest.raises(RuntimeError, match="non-finite"):
         train_step(policy, torch.tensor(float("nan")), optimizer, 1.0)
+
+
+def test_checkpoint_vl_mask_inheritance_and_override(tmp_path):
+    from test_vl_padding import FakeHead
+    scfg = SpatialAdapterConfig(layer_indices=(0,), attention_dim=8, num_heads=2)
+    lcfg = LoRAConfig(layer_indices=(0,), rank=2)
+    policy = make_policy()
+    policy._groot_model.action_head = FakeHead()
+    adapter = install_spatial_adapter(policy, scfg)
+    install_qwen_lora(adapter, lcfg)
+    optimizer = torch.optim.AdamW([p for p in policy.parameters() if p.requires_grad], lr=0.01)
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "model.safetensors").write_bytes(b"base")
+    manifest = {"base_sha256": fingerprint_checkpoint(base), "spatial": adapter.adapter_metadata(),
+                "lora": asdict(lcfg), "experiment": {"spatial_enabled": True, "lora_enabled": True,
+                "train_interface": False, "embodiment_id": None, "mask_vl_self_attention": True}}
+    checkpoint = tmp_path / "masked.pt"
+    save_checkpoint(checkpoint, adapter=adapter, optimizer=optimizer, manifest=manifest,
+                    step=1, epoch=0, cursor=1)
+
+    def fresh():
+        p = make_policy()
+        p._groot_model.action_head = FakeHead()
+        return p
+
+    loaded = fresh()
+    load_trained_sidecar(loaded, checkpoint, base)
+    assert hasattr(loaded._groot_model.action_head, "_spatial_original_vl_processing")
+    overridden = fresh()
+    with pytest.warns(RuntimeWarning, match="differs from training"):
+        load_trained_sidecar(overridden, checkpoint, base, mask_vl_self_attention=False)
+    assert not hasattr(overridden._groot_model.action_head, "_spatial_original_vl_processing")
+
+    # Checkpoints saved before the flag existed retain the original behavior;
+    # forcing the new mode is possible but must warn about the changed model.
+    legacy = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    legacy["manifest"]["experiment"].pop("mask_vl_self_attention")
+    old_path = tmp_path / "unmasked.pt"
+    torch.save(legacy, old_path)
+    legacy_policy = fresh()
+    load_trained_sidecar(legacy_policy, old_path, base)
+    assert not hasattr(legacy_policy._groot_model.action_head, "_spatial_original_vl_processing")
+    with pytest.warns(RuntimeWarning, match="differs from training"):
+        load_trained_sidecar(fresh(), old_path, base, mask_vl_self_attention=True)

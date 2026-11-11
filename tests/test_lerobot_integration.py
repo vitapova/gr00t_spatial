@@ -38,7 +38,8 @@ def test_lerobot_n17_flow_matching_forward_and_backward(tmp_path, monkeypatch, c
         backbone_embedding_dim=16, max_state_dim=6, max_action_dim=6, action_horizon=4,
         hidden_size=16, input_embedding_dim=16, state_history_length=1, max_num_embodiments=16,
         max_seq_len=32, use_alternate_vl_dit=False, use_vlln=True, state_dropout_prob=0.0,
-        vl_self_attention_cfg=None,
+        vl_self_attention_cfg={"num_layers": 2, "num_attention_heads": 2, "attention_head_dim": 8,
+                               "dropout": 0.0, "final_dropout": False, "positional_embeddings": None},
         diffusion_model_cfg={"num_layers": 2, "num_attention_heads": 2, "attention_head_dim": 8,
                              "norm_type": "ada_norm", "dropout": 0.0, "final_dropout": False,
                              "output_dim": 16, "interleave_self_attention": False,
@@ -233,7 +234,8 @@ def test_lerobot_n17_flow_matching_forward_and_backward(tmp_path, monkeypatch, c
         main([*interface_args, "--output-dir", str(only_interface), "--steps", "1", "--no-spatial", "--no-lora"])
         interface_ckpt = torch.load(only_interface / "step_00000001.pt", weights_only=True)
         assert interface_ckpt["manifest"]["experiment"] == {
-            "spatial_enabled": False, "lora_enabled": False, "train_interface": True, "embodiment_id": 10}
+            "spatial_enabled": False, "lora_enabled": False, "train_interface": True, "embodiment_id": 10,
+            "mask_vl_self_attention": False}
         assert len(interface_ckpt["interface"]) == 14 and not interface_ckpt["lora"]
         from lerobot.policies.groot.processor_groot import make_groot_pre_post_processors_from_pretrained
         from groot_spatial.interface import processor_embodiment
@@ -270,8 +272,11 @@ def test_lerobot_n17_flow_matching_forward_and_backward(tmp_path, monkeypatch, c
         assert demo_actions.shape == (4, 6) and torch.isfinite(demo_actions).all()
         torch.testing.assert_close(
             demo_actions, predict_observation(loaded, loaded_pre, loaded_post, observation, seed=17), rtol=0, atol=0)
-        monkeypatch.setattr(demo_arm100, "load_experiment", lambda *args, **kwargs:
-                            (loaded, loaded_pre, loaded_post, loaded_adapter))
+        demo_load_options = []
+        def demo_loader(*args, **kwargs):
+            demo_load_options.append(kwargs)
+            return loaded, loaded_pre, loaded_post, loaded_adapter
+        monkeypatch.setattr(demo_arm100, "load_experiment", demo_loader)
         demo_main(["--base-checkpoint", str(checkpoint_dir), "--run-dir", str(only_interface),
                    "--checkpoint", str(only_interface / "step_00000001.pt"), "--dataset-root", root,
                    "--episode", "0", "--frame", "2", "--show-steps", "2", "--device", "cpu"])
@@ -280,6 +285,11 @@ def test_lerobot_n17_flow_matching_forward_and_backward(tmp_path, monkeypatch, c
                    "--checkpoint", str(only_interface / "step_00000001.pt"), "--dataset-root", root,
                    "--show-steps", "1", "--device", "cpu"])
         assert "(validation)" in capsys.readouterr().out
+        assert demo_load_options[-1]["mask_vl_self_attention"] is None
+        demo_main(["--base-checkpoint", str(checkpoint_dir), "--run-dir", str(only_interface),
+                   "--checkpoint", str(only_interface / "step_00000001.pt"), "--dataset-root", root,
+                   "--show-steps", "1", "--device", "cpu", "--mask-vl-self-attention"])
+        assert demo_load_options[-1]["mask_vl_self_attention"] is True
 
         # The combined experiment has three independent optimizer groups and
         # restores their state and all three components on resume.
@@ -302,9 +312,10 @@ def test_lerobot_n17_flow_matching_forward_and_backward(tmp_path, monkeypatch, c
             parent = getattr(head, parent_name)
             setattr(parent, name, getattr(parent, name).base)
         combined = tmp_path / "combined"
-        main([*interface_args, "--output-dir", str(combined), "--steps", "1"])
+        main([*interface_args, "--output-dir", str(combined), "--steps", "1", "--mask-vl-self-attention"])
         combined_ckpt = torch.load(combined / "step_00000001.pt", weights_only=True)
         assert combined_ckpt["interface"] and combined_ckpt["lora"] and combined_ckpt["spatial"]
+        assert combined_ckpt["manifest"]["experiment"]["mask_vl_self_attention"] is True
         assert [g["name"] for g in combined_ckpt["optimizer"]["param_groups"]] == ["spatial", "lora", "interface"]
         trained = model.backbone
         for index, name, module in trained._lora_modules:
@@ -316,5 +327,5 @@ def test_lerobot_n17_flow_matching_forward_and_backward(tmp_path, monkeypatch, c
             setattr(parent, name, getattr(parent, name).base)
         combined_resume = tmp_path / "combined-resume"
         main([*interface_args, "--output-dir", str(combined_resume), "--steps", "2",
-              "--resume", str(combined / "step_00000001.pt")])
+              "--resume", str(combined / "step_00000001.pt"), "--mask-vl-self-attention"])
         assert (combined_resume / "step_00000002.pt").is_file()
